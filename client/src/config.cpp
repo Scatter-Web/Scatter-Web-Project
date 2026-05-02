@@ -5,6 +5,12 @@
 
 namespace sw::client {
 
+static std::string trim(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return a == std::string::npos ? "" : s.substr(a, b - a + 1);
+}
+
 Config Config::load(const std::string& path) {
     Config cfg;
     std::ifstream f(path);
@@ -15,8 +21,10 @@ Config Config::load(const std::string& path) {
         if (line.empty() || line[0] == '#') continue;
         auto eq = line.find('=');
         if (eq == std::string::npos) continue;
-        std::string key = line.substr(0, eq);
-        std::string val = line.substr(eq + 1);
+        std::string key = trim(line.substr(0, eq));
+        std::string val = trim(line.substr(eq + 1));
+        auto hash = val.find('#');
+        if (hash != std::string::npos) val = trim(val.substr(0, hash));
 
         if      (key == "keystore_path")    cfg.keystore_path    = val;
         else if (key == "keystore_salt")    cfg.keystore_salt    = val;

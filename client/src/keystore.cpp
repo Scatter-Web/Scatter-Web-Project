@@ -28,18 +28,19 @@ Keystore::~Keystore() {
 }
 
 Key32 Keystore::derive_key(const std::string& passphrase) {
-    // Read or create salt.
-    Bytes salt(32, 0);
+    // Read or create salt. libsodium argon2id requires crypto_pwhash_SALTBYTES (16).
+    constexpr size_t SALT_BYTES = 16;
+    Bytes salt(SALT_BYTES, 0);
     std::ifstream sf(salt_path_, std::ios::binary);
     if (sf) {
-        sf.read(reinterpret_cast<char*>(salt.data()), 32);
+        sf.read(reinterpret_cast<char*>(salt.data()), SALT_BYTES);
     } else {
-        randombytes_buf(salt.data(), 32);
+        randombytes_buf(salt.data(), SALT_BYTES);
         std::ofstream osf(salt_path_, std::ios::binary | std::ios::trunc);
         if (!osf) throw std::runtime_error("cannot write salt: " + salt_path_);
-        osf.write(reinterpret_cast<const char*>(salt.data()), 32);
+        osf.write(reinterpret_cast<const char*>(salt.data()), SALT_BYTES);
     }
-    return argon2id(passphrase, ByteSpan{salt.data(), 32});
+    return argon2id(passphrase, ByteSpan{salt.data(), SALT_BYTES});
 }
 
 void Keystore::unlock(const std::string& passphrase) {
