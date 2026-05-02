@@ -26,4 +26,5 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(googletest)
 
 add_subdirectory(common)
+add_subdirectory(anonrouter)
 add_subdirectory(tests)
