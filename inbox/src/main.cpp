@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <sodium.h>
 
 static sw::inbox::Inbox* g_inbox = nullptr;
 
@@ -12,6 +13,11 @@ static void handle_signal(int) {
 }
 
 int main(int argc, char** argv) {
+    if (sodium_init() < 0) {
+        std::cerr << "[inbox] fatal: libsodium init failed\n";
+        return EXIT_FAILURE;
+    }
+
     std::string config_path = "/etc/scatterweb/inbox.conf";
     if (argc >= 2) config_path = argv[1];
 

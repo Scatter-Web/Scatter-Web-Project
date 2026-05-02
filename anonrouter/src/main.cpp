@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <sodium.h>
 
 static sw::anonrouter::Router* g_router = nullptr;
 
@@ -13,6 +14,11 @@ static void handle_signal(int) {
 }
 
 int main(int argc, char** argv) {
+    if (sodium_init() < 0) {
+        std::cerr << "[anonrouter] fatal: libsodium init failed\n";
+        return EXIT_FAILURE;
+    }
+
     std::string config_path = "/etc/anonrouter/anonrouter.conf";
     if (argc >= 2) config_path = argv[1];
 

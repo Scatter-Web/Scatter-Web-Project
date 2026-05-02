@@ -82,6 +82,8 @@ public:
 
     ipc::Server& ipc_server() { return *ipc_server_; }
 
+    std::string my_sender_id_hex();
+
 private:
     Config            cfg_;
     Keystore          keystore_;
@@ -149,7 +151,6 @@ private:
                                        const Bytes& envelope_bytes);
 
     // Helpers
-    std::string my_sender_id_hex();
     KeyA        require_key_a();
     GuardInfo   get_guard_info();
 };

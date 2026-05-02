@@ -27,6 +27,7 @@ struct StoredMessage {
     Bytes       sender_id;     // 32 bytes SHA3-256(sender Key A)
     int64_t     seq = 0;
     std::string content_type;
+    std::string text;          // decrypted plaintext (empty for attachments)
     Bytes       ciphertext;    // raw delivery_frame bytes
     int64_t     sent_at    = 0;
     int64_t     received_at = 0;

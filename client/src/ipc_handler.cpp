@@ -63,8 +63,9 @@ CborMap IpcHandler::session_unlock(const CborMap& p) {
         throw std::runtime_error("missing passphrase");
     client_.unlock(it->second.as_string());
     CborMap result;
-    result["ok"]           = CborValue::from_bool(true);
-    result["display_name"] = CborValue::from_string(client_.get_display_name());
+    result["ok"]                       = CborValue::from_bool(true);
+    result["display_name"]             = CborValue::from_string(client_.get_display_name());
+    result["key_a_pubkey_fingerprint"] = CborValue::from_string(client_.my_sender_id_hex());
     return result;
 }
 
@@ -99,6 +100,7 @@ CborMap IpcHandler::identity_get_profile(const CborMap& /*p*/) {
     CborMap result;
     result["display_name"]     = CborValue::from_string(client_.get_display_name());
     result["contact_card_uri"] = CborValue::from_string(client_.get_contact_card_uri());
+    result["key_a_fingerprint"]= CborValue::from_string(client_.my_sender_id_hex());
     return result;
 }
 
@@ -237,6 +239,17 @@ CborMap IpcHandler::messages_get(const CborMap& p) {
         mm["conversation_id"] = CborValue::from_string(m.conversation_id);
         mm["seq"]             = CborValue::from_uint(static_cast<uint64_t>(m.seq));
         mm["content_type"]    = CborValue::from_string(m.content_type);
+        mm["text"]            = CborValue::from_string(m.text);
+        {
+            static constexpr char HEX[] = "0123456789abcdef";
+            std::string sid_hex;
+            sid_hex.reserve(m.sender_id.size() * 2);
+            for (uint8_t b : m.sender_id) {
+                sid_hex += HEX[b >> 4];
+                sid_hex += HEX[b & 0xf];
+            }
+            mm["sender_id"] = CborValue::from_string(sid_hex);
+        }
         mm["sent_at"]         = CborValue::from_uint(static_cast<uint64_t>(m.sent_at));
         mm["status"]          = CborValue::from_string(m.status);
         arr.push_back(CborValue::from_map(std::move(mm)));

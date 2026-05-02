@@ -26,6 +26,7 @@ void MessageStore::init_schema() {
             sender_id       BLOB NOT NULL,
             seq             INTEGER NOT NULL,
             content_type    TEXT NOT NULL,
+            text            TEXT NOT NULL DEFAULT '',
             ciphertext      BLOB NOT NULL,
             sent_at         INTEGER NOT NULL,
             received_at     INTEGER NOT NULL DEFAULT 0,
@@ -168,19 +169,20 @@ bool MessageStore::insert_message(const StoredMessage& m) {
 
     auto s = db_.prepare(
         "INSERT INTO messages"
-        "(id,conversation_id,sender_id,seq,content_type,ciphertext,"
+        "(id,conversation_id,sender_id,seq,content_type,text,ciphertext,"
         "sent_at,received_at,status,reply_to_id)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?)");
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?)");
     s.bind_text(1, m.id);
     s.bind_text(2, m.conversation_id);
     s.bind_blob(3, ByteSpan{m.sender_id.data(), m.sender_id.size()});
     s.bind_int (4, m.seq);
     s.bind_text(5, m.content_type);
-    s.bind_blob(6, ByteSpan{m.ciphertext.data(), m.ciphertext.size()});
-    s.bind_int (7, m.sent_at);
-    s.bind_int (8, m.received_at);
-    s.bind_text(9, m.status);
-    s.bind_text(10, m.reply_to_id);
+    s.bind_text(6, m.text);
+    s.bind_blob(7, ByteSpan{m.ciphertext.data(), m.ciphertext.size()});
+    s.bind_int (8, m.sent_at);
+    s.bind_int (9, m.received_at);
+    s.bind_text(10, m.status);
+    s.bind_text(11, m.reply_to_id);
     s.exec();
     return true;
 }
@@ -188,7 +190,7 @@ bool MessageStore::insert_message(const StoredMessage& m) {
 std::optional<StoredMessage> MessageStore::get_message(
         const std::string& id) const {
     auto s = db_.prepare(
-        "SELECT id,conversation_id,sender_id,seq,content_type,ciphertext,"
+        "SELECT id,conversation_id,sender_id,seq,content_type,text,ciphertext,"
         "sent_at,received_at,status,reply_to_id FROM messages WHERE id=?");
     s.bind_text(1, id);
     std::optional<StoredMessage> out;
@@ -199,11 +201,12 @@ std::optional<StoredMessage> MessageStore::get_message(
         m.sender_id       = r.require_blob(2);
         m.seq             = r.require_int(3);
         m.content_type    = r.require_text(4);
-        m.ciphertext      = r.require_blob(5);
-        m.sent_at         = r.require_int(6);
-        m.received_at     = r.require_int(7);
-        m.status          = r.require_text(8);
-        m.reply_to_id     = r.require_text(9);
+        m.text            = r.require_text(5);
+        m.ciphertext      = r.require_blob(6);
+        m.sent_at         = r.require_int(7);
+        m.received_at     = r.require_int(8);
+        m.status          = r.require_text(9);
+        m.reply_to_id     = r.require_text(10);
         out = m;
     });
     return out;
@@ -213,7 +216,7 @@ std::vector<StoredMessage> MessageStore::list_messages(
         const std::string& conv_id,
         int64_t before_seq, int limit) const {
     std::string sql =
-        "SELECT id,conversation_id,sender_id,seq,content_type,ciphertext,"
+        "SELECT id,conversation_id,sender_id,seq,content_type,text,ciphertext,"
         "sent_at,received_at,status,reply_to_id"
         " FROM messages WHERE conversation_id=?";
     if (before_seq > 0) sql += " AND seq<?";
@@ -233,11 +236,12 @@ std::vector<StoredMessage> MessageStore::list_messages(
         m.sender_id       = r.require_blob(2);
         m.seq             = r.require_int(3);
         m.content_type    = r.require_text(4);
-        m.ciphertext      = r.require_blob(5);
-        m.sent_at         = r.require_int(6);
-        m.received_at     = r.require_int(7);
-        m.status          = r.require_text(8);
-        m.reply_to_id     = r.require_text(9);
+        m.text            = r.require_text(5);
+        m.ciphertext      = r.require_blob(6);
+        m.sent_at         = r.require_int(7);
+        m.received_at     = r.require_int(8);
+        m.status          = r.require_text(9);
+        m.reply_to_id     = r.require_text(10);
         out.push_back(std::move(m));
     });
     return out;

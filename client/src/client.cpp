@@ -77,12 +77,18 @@ static void map_add_uint(cbor_item_t* m, const char* k, uint64_t v) {
     });
 }
 
+// CBOR strings from cbor_load are NOT null-terminated; use length-aware comparison.
+static bool cbor_key_eq(cbor_item_t* key_item, const char* expected) {
+    size_t elen = strlen(expected);
+    return cbor_string_length(key_item) == elen &&
+           memcmp(cbor_string_handle(key_item), expected, elen) == 0;
+}
+
 static Bytes cbor_get_field_bytes(cbor_item_t* map, const char* key) {
     cbor_pair* pairs = cbor_map_handle(map);
     size_t n = cbor_map_size(map);
     for (size_t i = 0; i < n; ++i) {
-        const char* k = reinterpret_cast<const char*>(cbor_string_handle(pairs[i].key));
-        if (strcmp(k, key) == 0 && cbor_isa_bytestring(pairs[i].value)) {
+        if (cbor_key_eq(pairs[i].key, key) && cbor_isa_bytestring(pairs[i].value)) {
             const uint8_t* p = cbor_bytestring_handle(pairs[i].value);
             size_t l = cbor_bytestring_length(pairs[i].value);
             return Bytes(p, p + l);
@@ -94,8 +100,7 @@ static std::string cbor_get_field_str(cbor_item_t* map, const char* key) {
     cbor_pair* pairs = cbor_map_handle(map);
     size_t n = cbor_map_size(map);
     for (size_t i = 0; i < n; ++i) {
-        const char* k = reinterpret_cast<const char*>(cbor_string_handle(pairs[i].key));
-        if (strcmp(k, key) == 0 && cbor_isa_string(pairs[i].value))
+        if (cbor_key_eq(pairs[i].key, key) && cbor_isa_string(pairs[i].value))
             return std::string(reinterpret_cast<const char*>(
                                cbor_string_handle(pairs[i].value)),
                                cbor_string_length(pairs[i].value));
@@ -106,8 +111,7 @@ static uint64_t cbor_get_field_uint(cbor_item_t* map, const char* key) {
     cbor_pair* pairs = cbor_map_handle(map);
     size_t n = cbor_map_size(map);
     for (size_t i = 0; i < n; ++i) {
-        const char* k = reinterpret_cast<const char*>(cbor_string_handle(pairs[i].key));
-        if (strcmp(k, key) == 0 && cbor_isa_uint(pairs[i].value))
+        if (cbor_key_eq(pairs[i].key, key) && cbor_isa_uint(pairs[i].value))
             return cbor_get_uint64(pairs[i].value);
     }
     return 0;
@@ -305,7 +309,7 @@ void Client::publish_dht_records(uint64_t timeslot) {
         params["value"]       = CborValue::from_bytes(dht_val);
         params["ttl_seconds"] = CborValue::from_uint(3600);
         try {
-            ar_client_.call("dht.put", params);
+            ar_client_.call("dht.publish", params);
         } catch (...) {}
 
         // Publish prekey record if we have prekeys.
@@ -324,7 +328,7 @@ void Client::publish_dht_records(uint64_t timeslot) {
             pk_params["value"]       = CborValue::from_bytes(pk_dht_val);
             pk_params["ttl_seconds"] = CborValue::from_uint(604800);
             try {
-                ar_client_.call("dht.put", pk_params);
+                ar_client_.call("dht.publish", pk_params);
             } catch (...) {}
         }
     }
@@ -578,7 +582,9 @@ void Client::dispatch_app_frame(const std::string& conv_id,
         m.conversation_id = conv_id;
         m.sender_id       = Bytes(32, 0); // filled from delivery frame sender_id
         m.seq             = store_.next_seq(conv_id);
-        m.content_type    = "text";
+        m.content_type    = cbor_get_field_str(af, "content_type");
+        if (m.content_type.empty()) m.content_type = frame_type;
+        m.text            = cbor_get_field_str(af, "text");
         m.ciphertext      = raw_frame;
         m.sent_at         = static_cast<int64_t>(cbor_get_field_uint(af, "sent_at"));
         m.received_at     = now_ms;
@@ -1007,6 +1013,7 @@ std::string Client::send_message(const std::string& conv_id,
     m.sender_id       = Bytes(my_id.begin(), my_id.end());
     m.seq             = store_.next_seq(conv_id);
     m.content_type    = "text";
+    m.text            = text;
     m.ciphertext      = af_bytes; // store encrypted on send; use raw for outgoing
     m.sent_at         = now_ms;
     m.status          = "pending";

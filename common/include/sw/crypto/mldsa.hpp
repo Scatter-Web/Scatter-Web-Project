@@ -5,8 +5,8 @@
 namespace sw::crypto {
 
 constexpr size_t MLDSA65_PUBKEY_BYTES  = 1952;
-constexpr size_t MLDSA65_PRIVKEY_BYTES = 4000;
-constexpr size_t MLDSA65_SIG_BYTES     = 3293;
+constexpr size_t MLDSA65_PRIVKEY_BYTES = 4032;
+constexpr size_t MLDSA65_SIG_BYTES     = 3309;
 
 using DsaPubKey = std::array<uint8_t, MLDSA65_PUBKEY_BYTES>;
 using DsaPrivKey = std::array<uint8_t, MLDSA65_PRIVKEY_BYTES>;

@@ -229,27 +229,33 @@ std::optional<ContactCard> decode_contact_card(const std::string& uri) {
         return std::nullopt;
     }
 
+    // CBOR strings from cbor_load are NOT null-terminated; use length-aware comparison.
+    auto cbor_key_eq = [](cbor_item_t* key_item, const char* expected) -> bool {
+        size_t elen = strlen(expected);
+        return cbor_string_length(key_item) == elen &&
+               memcmp(cbor_string_handle(key_item), expected, elen) == 0;
+    };
+
     ContactCard card{};
     cbor_pair* pairs = cbor_map_handle(root);
     size_t n = cbor_map_size(root);
     for (size_t i = 0; i < n; ++i) {
-        const char* k = reinterpret_cast<const char*>(cbor_string_handle(pairs[i].key));
         cbor_item_t* v = pairs[i].value;
-        if (strcmp(k, "key_a_pubkey") == 0 && cbor_isa_bytestring(v)) {
+        if (cbor_key_eq(pairs[i].key, "key_a_pubkey") && cbor_isa_bytestring(v)) {
             if (cbor_bytestring_length(v) == MLDSA65_PUBKEY_BYTES)
                 std::copy(cbor_bytestring_handle(v),
                           cbor_bytestring_handle(v) + MLDSA65_PUBKEY_BYTES,
                           card.key_a_pubkey.begin());
-        } else if (strcmp(k, "cr_key_b_kem_pubkey") == 0 && cbor_isa_bytestring(v)) {
+        } else if (cbor_key_eq(pairs[i].key, "cr_key_b_kem_pubkey") && cbor_isa_bytestring(v)) {
             if (cbor_bytestring_length(v) == MLKEM768_PUBKEY_BYTES)
                 std::copy(cbor_bytestring_handle(v),
                           cbor_bytestring_handle(v) + MLKEM768_PUBKEY_BYTES,
                           card.cr_key_b_kem_pubkey.begin());
-        } else if (strcmp(k, "display_name") == 0 && cbor_isa_string(v)) {
+        } else if (cbor_key_eq(pairs[i].key, "display_name") && cbor_isa_string(v)) {
             card.display_name = std::string(
                 reinterpret_cast<const char*>(cbor_string_handle(v)),
                 cbor_string_length(v));
-        } else if (strcmp(k, "created_at") == 0 && cbor_isa_uint(v)) {
+        } else if (cbor_key_eq(pairs[i].key, "created_at") && cbor_isa_uint(v)) {
             card.created_at = static_cast<int64_t>(cbor_get_uint64(v));
         }
     }
