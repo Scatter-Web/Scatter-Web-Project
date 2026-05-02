@@ -23,9 +23,12 @@ struct State {
     Key32 send_chain_key;
     Key32 recv_chain_key;
 
+    uint32_t send_epoch    = 0;  // KEM ratchet step counter (send direction)
+    uint32_t recv_epoch    = 0;  // KEM ratchet step counter (recv direction)
     uint32_t send_msg_num  = 0;  // symmetric counter for current send epoch
     uint32_t recv_msg_num  = 0;  // symmetric counter for current recv epoch
     uint32_t prev_send_count = 0; // # msgs sent in previous send epoch
+    bool need_kem_step     = false; // true when a KEM ratchet step is pending before next send
 
     // My current ratchet KEM keypair (new one generated on each KEM ratchet step)
     crypto::KemKeyPair my_ratchet_kem;

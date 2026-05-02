@@ -78,7 +78,7 @@ RecruitResult parse_recruit_response(const Bytes& payload) {
         std::string k(reinterpret_cast<char*>(cbor_string_handle(pair.key)),
                       cbor_string_length(pair.key));
         if (k == "ok")
-            r.ok = cbor_ctrl_is_bool(pair.value) && cbor_get_bool(pair.value);
+            r.ok = cbor_is_bool(pair.value) && cbor_get_bool(pair.value);
         else if (k == "reason" && cbor_isa_string(pair.value))
             r.reason.assign(reinterpret_cast<char*>(cbor_string_handle(pair.value)),
                             cbor_string_length(pair.value));

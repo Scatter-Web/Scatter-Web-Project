@@ -1,6 +1,7 @@
 #include "cell.hpp"
 #include <arpa/inet.h>
 #include <cstring>
+#include <sodium.h>
 #include <stdexcept>
 
 namespace sw::anonrouter {

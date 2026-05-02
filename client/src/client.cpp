@@ -6,6 +6,7 @@
 #include <sw/crypto/mldsa.hpp>
 #include <cbor.h>
 #include <sodium.h>
+#include <cstring>
 #include <stdexcept>
 #include <iostream>
 #include <sstream>

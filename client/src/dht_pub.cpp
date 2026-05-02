@@ -42,7 +42,7 @@ static void map_add_uint(cbor_item_t* m, const char* k, uint64_t v) {
 static void map_add_bool(cbor_item_t* m, const char* k, bool v) {
     cbor_map_add(m, (struct cbor_pair){
         .key   = cbor_move(cbor_build_string(k)),
-        .value = cbor_move(v ? cbor_new_true() : cbor_new_false())
+        .value = cbor_move(cbor_build_bool(v))
     });
 }
 

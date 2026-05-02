@@ -310,7 +310,7 @@ State deserialize(ByteSpan data) {
             auto klen = cbor_string_length(pairs[i].key);
             auto kptr = cbor_string_handle(pairs[i].key);
             if (std::string_view{reinterpret_cast<const char*>(kptr), klen} != key) continue;
-            return cbor_ctrl_is_bool(pairs[i].value) && cbor_get_bool(pairs[i].value);
+            return cbor_is_bool(pairs[i].value) && cbor_get_bool(pairs[i].value);
         }
         throw std::runtime_error(std::string("missing key: ") + key);
     };

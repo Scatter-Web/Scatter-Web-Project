@@ -6,6 +6,7 @@
 
 using namespace sw::ratchet;
 using namespace sw::crypto;
+using sw::Bytes;
 
 namespace {
 

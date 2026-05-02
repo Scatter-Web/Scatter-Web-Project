@@ -120,7 +120,7 @@ void Keystore::load_from_disk(const Key32& mk) {
                              static_cast<sqlite3_int64>(plaintext.size()),
                              static_cast<sqlite3_int64>(plaintext.size()),
                              SQLITE_DESERIALIZE_FREEONCLOSE |
-                             SQLITE_DESERIALIZE_RESIZEDB);
+                             SQLITE_DESERIALIZE_RESIZEABLE);
     if (rc != SQLITE_OK) {
         sqlite3_close(db_);
         db_ = nullptr;

@@ -80,7 +80,7 @@ std::vector<Clove> garlic_decode(ByteSpan blob) {
         if (cbor_isa_bytestring(f[1]) && cbor_bytestring_length(f[1]) == 16)
             std::memcpy(c.channel_id.data(), cbor_bytestring_handle(f[1]), 16);
 
-        bool has_frag = cbor_ctrl_is_bool(f[2]) && cbor_get_bool(f[2]);
+        bool has_frag = cbor_is_bool(f[2]) && cbor_get_bool(f[2]);
         if (has_frag && cbor_isa_array(f[3]) && cbor_array_size(f[3]) == 3) {
             cbor_item_t** ff = cbor_array_handle(f[3]);
             FragInfo fi;

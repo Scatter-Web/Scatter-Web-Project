@@ -146,7 +146,7 @@ public:
     std::vector<ServerChannel>  list_server_channels(const std::string& server_id) const;
 
 private:
-    Db db_;
+    mutable Db db_;
     void init_schema();
 };
 
