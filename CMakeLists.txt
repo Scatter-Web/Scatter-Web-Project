@@ -27,4 +27,8 @@ FetchContent_MakeAvailable(googletest)
 
 add_subdirectory(common)
 add_subdirectory(anonrouter)
+add_subdirectory(inbox)
+add_subdirectory(outbox)
+add_subdirectory(client)
+add_subdirectory(cli)
 add_subdirectory(tests)
