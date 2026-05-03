@@ -116,7 +116,9 @@ void Router::initiate_bootstrap_connections() {
 
     for (const auto& bootstrap_addr : cfg_.bootstrap_nodes) {
         try {
-            channels_.open("", AnonLevel::DIRECT, ChannelMode::MESSAGE, bootstrap_addr);
+            // Create channel record and send CHAN_OPEN handshake to bootstrap
+            MessageId cid = channels_.open("", AnonLevel::DIRECT, ChannelMode::MESSAGE, bootstrap_addr);
+            send_chan_open(cid, AnonLevel::DIRECT, ChannelMode::MESSAGE, bootstrap_addr);
             std::cout << "[anonrouter] initiated bootstrap connection to " << bootstrap_addr
                       << "\n";
         } catch (const std::exception& e) {
