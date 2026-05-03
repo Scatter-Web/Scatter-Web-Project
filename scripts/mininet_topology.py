@@ -72,7 +72,7 @@ def write_config(run_dir: str, listen_ip: str, listen_port: int,
 def run_topology(latency_ms: int, loss_pct: float, run_tests: bool):
     setLogLevel("info")
     topo = ScatterWebTopo(latency_ms=latency_ms, loss_pct=loss_pct)
-    net = Mininet(topo=topo, link=TCLink)
+    net = Mininet(topo=topo, link=TCLink, controller=None)
     net.start()
 
     h1, h2, h3 = net.get("h1"), net.get("h2"), net.get("h3")
@@ -117,6 +117,13 @@ def _run_tests(run_root: str, h1_ip: str):
     env = os.environ.copy()
     env["MININET_H1_IP"] = h1_ip
     env["MININET_RUN_ROOT"] = run_root
+    
+    # Try to use venv Python if available, otherwise fall back to current executable
+    venv_path = os.environ.get("VIRTUAL_ENV")
+    if venv_path:
+        python_exe = os.path.join(venv_path, "bin", "python3")
+    else:
+        python_exe = sys.executable
 
     for script in ["test_startup.py", "test_basic_messaging.py"]:
         path = os.path.join(scripts_dir, script)
@@ -124,7 +131,7 @@ def _run_tests(run_root: str, h1_ip: str):
             print(f"[mininet] {script} not found, skipping")
             continue
         print(f"\n[mininet] running {script}")
-        ret = subprocess.call([sys.executable, path], env=env)
+        ret = subprocess.call([python_exe, path], env=env)
         if ret != 0:
             print(f"[mininet] {script} FAILED (exit {ret})")
 
