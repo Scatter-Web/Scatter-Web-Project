@@ -223,7 +223,7 @@ Bytes encode_response(const Response& resp) {
         m["result"] = CborValue::from_map(resp.result);
     } else {
         CborMap err;
-        err["code"]    = CborValue::from_int(resp.error.code);
+        err["code"]    = CborValue::from_uint(static_cast<uint64_t>(resp.error.code));
         err["message"] = CborValue::from_string(resp.error.message);
         m["error"] = CborValue::from_map(std::move(err));
     }
@@ -285,8 +285,12 @@ Response decode_response(ByteSpan data) {
         if (eit != m.end() && eit->second.is_map()) {
             const auto& em = eit->second.as_map();
             auto cit = em.find("code");
-            if (cit != em.end() && cit->second.is_int())
-                resp.error.code = static_cast<int>(cit->second.as_int());
+            if (cit != em.end()) {
+                if (cit->second.is_uint())
+                    resp.error.code = static_cast<int>(cit->second.as_uint());
+                else if (cit->second.is_int())
+                    resp.error.code = static_cast<int>(cit->second.as_int());
+            }
             auto mit = em.find("message");
             if (mit != em.end() && mit->second.is_string())
                 resp.error.message = mit->second.as_string();

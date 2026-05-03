@@ -38,6 +38,8 @@ enum class CellType : uint8_t {
     RECRUIT_CHOKED  = 0x15,
     DATA_ACK        = 0x20,
     KEEPALIVE       = 0x30,
+    CHAN_OPEN       = 0x40,  // direct channel handshake initiation
+    CHAN_ACCEPT     = 0x41,  // direct channel handshake acceptance
 };
 
 struct CellHeader {

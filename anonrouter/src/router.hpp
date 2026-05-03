@@ -54,6 +54,23 @@ private:
     // Forward a cell that arrived for which we are a relay/guard.
     void relay_cell(const Cell& cell);
 
+    // Handle CHAN_OPEN / CHAN_ACCEPT cells arriving from a direct peer.
+    void on_chan_open_cell(const std::string& peer_addr, const Cell& cell);
+    void on_chan_accept_cell(const Cell& cell);
+
+    // Build and send a CHAN_OPEN cell to peer_addr.
+    void send_chan_open(const MessageId& channel_id, AnonLevel anon, ChannelMode mode,
+                        const std::string& peer_addr);
+
+    // Build and send a CHAN_ACCEPT cell to peer_addr.
+    void send_chan_accept(const MessageId& channel_id, const crypto::AesKey& channel_key,
+                          const std::string& peer_addr);
+
+    // IPC dispatch — intercepts channel.open and channel.accept to drive handshake.
+    ipc::CborMap dispatch_ipc(const std::string& method,
+                               const ipc::CborMap& params,
+                               const std::string& caller);
+
     // Periodic TFT round (every round_seconds).
     void tft_loop();
 

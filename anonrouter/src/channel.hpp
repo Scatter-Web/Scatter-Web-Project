@@ -51,6 +51,8 @@ struct ChannelInfo {
     uint32_t     send_seq       = 0;
     uint32_t     recv_seq       = 0;
     int64_t      rtt_ms         = 0;
+    // For DIRECT (anon_level=0) channels: the remote's UDP address.
+    std::string  peer_addr;
     // Inbound guard this peer recruited (remote sends to us here).
     std::optional<GuardRef> my_inbound_guard;
     // Outbound guard: we send cells here to reach remote's inbound guard.
@@ -72,11 +74,26 @@ public:
     void set_state_cb(StateCallback cb)  { state_cb_  = std::move(cb); }
 
     // Initiate a channel open; state transitions to OPEN asynchronously.
+    // peer_addr: optional "ip:port" for DIRECT mode; empty for guarded modes.
     MessageId open(const std::string& remote_pubkey_hex,
                    AnonLevel anon_level,
-                   ChannelMode mode);
+                   ChannelMode mode,
+                   const std::string& peer_addr = "");
+
+    // Register an incoming channel from a CHAN_OPEN cell (called by router).
+    // Returns the registered channel_id.
+    MessageId register_incoming(const MessageId& channel_id,
+                                const std::string& peer_addr,
+                                AnonLevel anon_level,
+                                ChannelMode mode);
 
     // Accept an incoming CHAN_OPEN (identified by channel_id from push event).
+    // Sets state=OPEN and generates the shared channel_key.
+    // Returns the channel_key to be sent back to initiator.
+    bool accept(const MessageId& channel_id,
+                crypto::AesKey& out_channel_key);
+
+    // Convenience overload used by existing tests; channel_key is discarded.
     bool accept(const MessageId& channel_id);
 
     // Reject an incoming CHAN_OPEN.

@@ -1,4 +1,5 @@
 add_executable(sw_unit_tests
+    test_main.cpp
     crypto/test_mlkem.cpp
     crypto/test_mldsa.cpp
     crypto/test_aes_gcm.cpp
@@ -10,7 +11,7 @@ add_executable(sw_unit_tests
 
 target_link_libraries(sw_unit_tests PRIVATE
     sw_common
-    GTest::gtest_main
+    GTest::gtest
 )
 
 include(GoogleTest)

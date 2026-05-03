@@ -3,6 +3,7 @@
 #include <sodium.h>
 #include <cbor.h>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
@@ -37,33 +38,58 @@ void ChannelManager::deliver_frame(const MessageId& id, Bytes frame) {
 
 MessageId ChannelManager::open(const std::string& remote_pubkey_hex,
                                 AnonLevel anon_level,
-                                ChannelMode mode) {
+                                ChannelMode mode,
+                                const std::string& peer_addr) {
     ChannelInfo ci;
     randombytes_buf(ci.channel_id.data(), ci.channel_id.size());
     ci.remote_pubkey_hex = remote_pubkey_hex;
     ci.anon_level        = anon_level;
     ci.mode              = mode;
     ci.state             = ChannelState::OPENING;
+    ci.peer_addr         = peer_addr;
 
-    // Generate a temporary channel key; replaced after handshake KEM exchange.
+    // Generate a temporary channel key; replaced with acceptor's key on CHAN_ACCEPT.
     randombytes_buf(ci.channel_key.data(), ci.channel_key.size());
 
     {
         std::lock_guard lk(mu_);
         channels_[chan_key(ci.channel_id)] = ci;
     }
-    // Full handshake (DHT lookup → CHAN_OPEN → CHAN_ACCEPT → private guard
-    // recruitment) would be driven by the Router. For the channel abstraction
-    // layer we record the intent; the router calls on_chan_accept when done.
     return ci.channel_id;
 }
 
-bool ChannelManager::accept(const MessageId& channel_id) {
+MessageId ChannelManager::register_incoming(const MessageId& channel_id,
+                                             const std::string& peer_addr,
+                                             AnonLevel anon_level,
+                                             ChannelMode mode) {
+    ChannelInfo ci;
+    ci.channel_id  = channel_id;
+    ci.peer_addr   = peer_addr;
+    ci.anon_level  = anon_level;
+    ci.mode        = mode;
+    ci.state       = ChannelState::OPENING;
+    {
+        std::lock_guard lk(mu_);
+        channels_[chan_key(channel_id)] = ci;
+    }
+    if (state_cb_) state_cb_(channel_id, ChannelState::OPENING);
+    return channel_id;
+}
+
+bool ChannelManager::accept(const MessageId& channel_id, crypto::AesKey& out_key) {
     std::lock_guard lk(mu_);
     auto it = channels_.find(chan_key(channel_id));
     if (it == channels_.end()) return false;
+    // Generate the shared channel key; send it back to initiator in CHAN_ACCEPT.
+    randombytes_buf(it->second.channel_key.data(), it->second.channel_key.size());
     it->second.state = ChannelState::OPEN;
+    out_key = it->second.channel_key;
     return true;
+}
+
+bool ChannelManager::accept(const MessageId& channel_id) {
+    crypto::AesKey unused{};
+    return accept(channel_id, unused);
 }
 
 void ChannelManager::reject(const MessageId& channel_id) {
@@ -82,18 +108,25 @@ bool ChannelManager::upgrade(const MessageId& channel_id, ChannelMode new_mode,
 }
 
 bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
+    std::string cid_str = chan_key(channel_id);
+    std::cerr << "[channel::send] START cid=" << cid_str.substr(0, 8) << "\n";
     ChannelInfo ci;
     {
         std::lock_guard lk(mu_);
-        auto it = channels_.find(chan_key(channel_id));
-        if (it == channels_.end() || it->second.state != ChannelState::OPEN)
+        auto it = channels_.find(cid_str);
+        if (it == channels_.end() || it->second.state != ChannelState::OPEN) {
+            std::cerr << "[channel::send] channel not found or not open\n";
             return false;
+        }
         ci = it->second;
     }
+    std::cerr << "[channel::send] got channel ci, peer_addr=" << ci.peer_addr << "\n";
 
     // Encrypt payload with channel_key.
     AesNonce nonce = aes_random_nonce();
+    std::cerr << "[channel::send] calling aes_encrypt\n";
     auto enc = aes_encrypt(ci.channel_key, payload, {});
+    std::cerr << "[channel::send] aes_encrypt done\n";
 
     // Pack into a DATA garlic clove.
     Clove clove;
@@ -107,8 +140,10 @@ bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
     blob.insert(blob.end(), enc.ciphertext.begin(), enc.ciphertext.end());
     clove.payload = std::move(blob);
 
+    std::cerr << "[channel::send] calling garlic_encode\n";
     Bytes garlic = garlic_encode({clove});
-    if (garlic.empty()) return false;
+    if (garlic.empty()) { std::cerr << "[channel::send] garlic_encode returned empty\n"; return false; }
+    std::cerr << "[channel::send] garlic_encode done, size=" << garlic.size() << "\n";
 
     // Build cell.
     CellHeader hdr;
@@ -118,15 +153,32 @@ bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
         std::lock_guard lk(mu_);
         auto it = channels_.find(chan_key(channel_id));
         if (it == channels_.end()) return false;
-        hdr.session_tok = it->second.my_inbound_guard
-                              ? it->second.my_inbound_guard->session_tok
-                              : SessionToken{};
+        if (it->second.my_inbound_guard) {
+            hdr.session_tok = it->second.my_inbound_guard->session_tok;
+        } else if (it->second.anon_level == AnonLevel::DIRECT) {
+            // For DIRECT channels use channel_id as the first 16 bytes of
+            // session_tok so the receiver can route by channel_id lookup.
+            hdr.session_tok = {};
+            std::copy(it->second.channel_id.begin(),
+                      it->second.channel_id.end(),
+                      hdr.session_tok.begin());
+        } else {
+            hdr.session_tok = {};
+        }
         hdr.seq_num = it->second.send_seq++;
     }
 
     ByteSpan gspan{garlic.data(), hdr.garlic_len};
+    std::cerr << "[channel::send] calling cell_build\n";
     Cell cell = cell_build(hdr, ci.channel_key, gspan);
+    std::cerr << "[channel::send] cell_build done\n";
 
+    if (ci.anon_level == AnonLevel::DIRECT && !ci.peer_addr.empty()) {
+        std::cerr << "[channel::send] sending via UDP to " << ci.peer_addr << "\n";
+        transport_.send(ci.peer_addr, ByteSpan{cell.data(), cell.size()});
+        std::cerr << "[channel::send] UDP send done, returning true\n";
+        return true;
+    }
     if (ci.remote_inbound_guard) {
         tunnels_.forward_via_outbound(ci.remote_inbound_guard->session_tok, cell);
     }
@@ -158,10 +210,18 @@ std::vector<ChannelInfo> ChannelManager::list() const {
 
 void ChannelManager::on_cell(const Cell& cell) {
     SessionToken tok = cell_session_tok(cell);
-    // Find channel that owns this session token.
+
+    // For DIRECT channels the session_tok encodes the channel_id in bytes [0..15].
+    MessageId direct_id{};
+    std::copy(tok.begin(), tok.begin() + 16, direct_id.begin());
+
     std::lock_guard lk(mu_);
     for (auto& [k, ci] : channels_) {
-        if (ci.my_inbound_guard && ci.my_inbound_guard->session_tok == tok) {
+        bool matches = (ci.my_inbound_guard && ci.my_inbound_guard->session_tok == tok)
+                    || (ci.anon_level == AnonLevel::DIRECT
+                        && ci.state == ChannelState::OPEN
+                        && ci.channel_id == direct_id);
+        if (matches) {
             DecodedCell dc = cell_decode(cell, ci.channel_key);
             auto cloves = garlic_decode(ByteSpan{dc.garlic_data.data(), dc.garlic_data.size()});
             for (auto& clove : cloves) {

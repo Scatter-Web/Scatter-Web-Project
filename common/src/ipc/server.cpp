@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 
 namespace sw::ipc {

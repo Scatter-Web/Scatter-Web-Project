@@ -77,16 +77,22 @@ CborMap IpcHandler::channel_open(const CborMap& p) {
     std::string remote_pubkey = get_string(p, "remote_pubkey");
     uint64_t    anon_raw      = get_uint(p, "anon_level", 2);
     std::string mode_str      = "message";
+    std::string peer_addr;
     {
         auto it = p.find("mode");
         if (it != p.end() && it->second.is_string())
             mode_str = it->second.as_string();
     }
+    {
+        auto it = p.find("peer_addr");
+        if (it != p.end() && it->second.is_string())
+            peer_addr = it->second.as_string();
+    }
     AnonLevel anon = static_cast<AnonLevel>(anon_raw > 2 ? 2 : static_cast<uint8_t>(anon_raw));
     ChannelMode mode = (mode_str == "stream")   ? ChannelMode::STREAM
                      : (mode_str == "datagram") ? ChannelMode::DATAGRAM
                                                 : ChannelMode::MESSAGE;
-    MessageId id = channels_.open(remote_pubkey, anon, mode);
+    MessageId id = channels_.open(remote_pubkey, anon, mode, peer_addr);
     return {{"channel_id", CborValue::from_string(chan_id_hex(id))},
             {"ok",         CborValue::from_bool(true)}};
 }
