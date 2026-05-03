@@ -45,6 +45,9 @@ CborMap IpcHandler::handle(const std::string& method,
     if (method == "groups.kick")              return groups_kick(params);
     if (method == "groups.leave")             return groups_leave(params);
 
+    if (method == "servers.create_channel")   return servers_create_channel(params);
+    if (method == "servers.set_member_role")  return servers_set_member_role(params);
+
     if (method == "devices.list")             return devices_list(params);
     if (method == "devices.revoke")           return devices_revoke(params);
     if (method == "devices.get_inbox_status") return devices_get_inbox_status(params);
@@ -195,7 +198,17 @@ CborMap IpcHandler::conversations_list(const CborMap& /*p*/) {
         m["id"]           = CborValue::from_string(c.id);
         m["type"]         = CborValue::from_string(c.type);
         m["display_name"] = CborValue::from_string(c.display_name);
-        m["unread_count"] = CborValue::from_uint(0); // computed per-query
+        m["unread_count"] = CborValue::from_uint(0);
+
+        // Include last message preview.
+        auto msgs = client_.get_messages(c.id, 0, 1);
+        if (!msgs.empty()) {
+            CborMap lm;
+            lm["text_preview"] = CborValue::from_string(msgs.back().text);
+            lm["sent_at"]      = CborValue::from_uint(static_cast<uint64_t>(msgs.back().sent_at));
+            m["last_message"]  = CborValue::from_map(std::move(lm));
+        }
+
         arr.push_back(CborValue::from_map(std::move(m)));
     }
     CborMap result;
@@ -395,6 +408,39 @@ CborMap IpcHandler::groups_leave(const CborMap& p) {
     if (it == p.end() || !it->second.is_string())
         throw std::runtime_error("missing group_id");
     client_.leave_group(it->second.as_string());
+    CborMap result;
+    result["ok"] = CborValue::from_bool(true);
+    return result;
+}
+
+// ── servers ───────────────────────────────────────────────────────────────────
+
+CborMap IpcHandler::servers_create_channel(const CborMap& p) {
+    auto sit = p.find("server_id");
+    auto nit = p.find("name");
+    auto tit = p.find("type");
+    if (sit == p.end() || !sit->second.is_string() ||
+        nit == p.end() || !nit->second.is_string() ||
+        tit == p.end() || !tit->second.is_string())
+        throw std::runtime_error("missing fields");
+    std::string cid = client_.create_server_channel(
+        sit->second.as_string(), nit->second.as_string(), tit->second.as_string());
+    CborMap result;
+    result["channel_id"]       = CborValue::from_string(cid);
+    result["conversation_id"]  = CborValue::from_string(cid);
+    return result;
+}
+
+CborMap IpcHandler::servers_set_member_role(const CborMap& p) {
+    auto sit = p.find("server_id");
+    auto cit = p.find("contact_id");
+    auto rit = p.find("role");
+    if (sit == p.end() || !sit->second.is_string() ||
+        cit == p.end() || !cit->second.is_string() ||
+        rit == p.end() || !rit->second.is_string())
+        throw std::runtime_error("missing fields");
+    client_.set_server_member_role(
+        sit->second.as_string(), cit->second.as_string(), rit->second.as_string());
     CborMap result;
     result["ok"] = CborValue::from_bool(true);
     return result;

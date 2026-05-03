@@ -63,6 +63,9 @@ CborMap Client::call(const std::string& method,
                      const CborMap&     params,
                      const std::string& caller,
                      std::chrono::milliseconds timeout) {
+    if (!running_)
+        throw std::runtime_error("IPC client not connected: " + method);
+
     uint64_t id = next_id_++;
 
     std::promise<Response> promise;

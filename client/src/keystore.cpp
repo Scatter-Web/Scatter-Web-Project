@@ -203,15 +203,16 @@ void Keystore::init_schema() {
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS key_c_issued (
-            device_id      TEXT PRIMARY KEY,
-            device_type    TEXT NOT NULL,
-            device_label   TEXT NOT NULL DEFAULT '',
-            key_c_pubkey   BLOB NOT NULL,
-            auth_cert      BLOB NOT NULL,
-            dht_deleg_cert BLOB NOT NULL DEFAULT '',
-            issued_at      INTEGER NOT NULL,
-            expires_at     INTEGER NOT NULL,
-            revoked        INTEGER NOT NULL DEFAULT 0
+            device_id       TEXT PRIMARY KEY,
+            device_type     TEXT NOT NULL,
+            device_label    TEXT NOT NULL DEFAULT '',
+            key_c_pubkey    BLOB NOT NULL,
+            key_c_privkey   BLOB NOT NULL DEFAULT '',
+            auth_cert       BLOB NOT NULL,
+            dht_deleg_cert  BLOB NOT NULL DEFAULT '',
+            issued_at       INTEGER NOT NULL,
+            expires_at      INTEGER NOT NULL,
+            revoked         INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS key_d_prekeys (
             id          TEXT PRIMARY KEY,
@@ -246,6 +247,11 @@ void Keystore::init_schema() {
         sqlite3_free(errmsg);
         throw std::runtime_error("keystore schema error: " + err);
     }
+
+    // Migrations: add columns that may be absent in older keystores.
+    sqlite3_exec(db_,
+        "ALTER TABLE key_c_issued ADD COLUMN key_c_privkey BLOB NOT NULL DEFAULT ''",
+        nullptr, nullptr, nullptr); // silently ignored if column already exists
 }
 
 // ── key_a ─────────────────────────────────────────────────────────────────────
@@ -382,16 +388,19 @@ static KeyCIssued row_to_key_c(sqlite3_stmt* s) {
     k.device_type = reinterpret_cast<const char*>(sqlite3_column_text(s, 1));
     k.device_label= reinterpret_cast<const char*>(sqlite3_column_text(s, 2));
     const uint8_t* kp = static_cast<const uint8_t*>(sqlite3_column_blob(s, 3));
-    std::copy(kp, kp + MLDSA65_PUBKEY_BYTES, k.key_c_pubkey.begin());
-    const uint8_t* cert = static_cast<const uint8_t*>(sqlite3_column_blob(s, 4));
-    int cert_len = sqlite3_column_bytes(s, 4);
+    if (kp) std::copy(kp, kp + MLDSA65_PUBKEY_BYTES, k.key_c_pubkey.begin());
+    const uint8_t* kpr = static_cast<const uint8_t*>(sqlite3_column_blob(s, 4));
+    if (kpr && sqlite3_column_bytes(s, 4) == MLDSA65_PRIVKEY_BYTES)
+        std::copy(kpr, kpr + MLDSA65_PRIVKEY_BYTES, k.key_c_privkey.begin());
+    const uint8_t* cert = static_cast<const uint8_t*>(sqlite3_column_blob(s, 5));
+    int cert_len = sqlite3_column_bytes(s, 5);
     k.auth_cert.assign(cert, cert + cert_len);
-    const uint8_t* del = static_cast<const uint8_t*>(sqlite3_column_blob(s, 5));
-    int del_len = sqlite3_column_bytes(s, 5);
+    const uint8_t* del = static_cast<const uint8_t*>(sqlite3_column_blob(s, 6));
+    int del_len = sqlite3_column_bytes(s, 6);
     k.dht_deleg_cert.assign(del, del + del_len);
-    k.issued_at = sqlite3_column_int64(s, 6);
-    k.expires_at = sqlite3_column_int64(s, 7);
-    k.revoked = sqlite3_column_int(s, 8) != 0;
+    k.issued_at = sqlite3_column_int64(s, 7);
+    k.expires_at = sqlite3_column_int64(s, 8);
+    k.revoked = sqlite3_column_int(s, 9) != 0;
     return k;
 }
 
@@ -399,19 +408,20 @@ void Keystore::insert_key_c(const KeyCIssued& k) {
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(db_,
         "INSERT OR REPLACE INTO key_c_issued"
-        "(device_id,device_type,device_label,key_c_pubkey,auth_cert,dht_deleg_cert,"
+        "(device_id,device_type,device_label,key_c_pubkey,key_c_privkey,auth_cert,dht_deleg_cert,"
         "issued_at,expires_at,revoked)"
-        " VALUES(?,?,?,?,?,?,?,?,?)",
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
         -1, &stmt, nullptr);
     sqlite3_bind_text(stmt, 1, k.device_id.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, k.device_type.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 3, k.device_label.c_str(), -1, SQLITE_STATIC);
     sqlite3_bind_blob(stmt, 4, k.key_c_pubkey.data(), MLDSA65_PUBKEY_BYTES, SQLITE_STATIC);
-    sqlite3_bind_blob(stmt, 5, k.auth_cert.data(), static_cast<int>(k.auth_cert.size()), SQLITE_STATIC);
-    sqlite3_bind_blob(stmt, 6, k.dht_deleg_cert.data(), static_cast<int>(k.dht_deleg_cert.size()), SQLITE_STATIC);
-    sqlite3_bind_int64(stmt, 7, k.issued_at);
-    sqlite3_bind_int64(stmt, 8, k.expires_at);
-    sqlite3_bind_int(stmt, 9, k.revoked ? 1 : 0);
+    sqlite3_bind_blob(stmt, 5, k.key_c_privkey.data(), MLDSA65_PRIVKEY_BYTES, SQLITE_STATIC);
+    sqlite3_bind_blob(stmt, 6, k.auth_cert.data(), static_cast<int>(k.auth_cert.size()), SQLITE_STATIC);
+    sqlite3_bind_blob(stmt, 7, k.dht_deleg_cert.data(), static_cast<int>(k.dht_deleg_cert.size()), SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 8, k.issued_at);
+    sqlite3_bind_int64(stmt, 9, k.expires_at);
+    sqlite3_bind_int(stmt, 10, k.revoked ? 1 : 0);
     sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 }
@@ -419,7 +429,7 @@ void Keystore::insert_key_c(const KeyCIssued& k) {
 std::optional<KeyCIssued> Keystore::get_key_c(const std::string& device_id) const {
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(db_,
-        "SELECT device_id,device_type,device_label,key_c_pubkey,auth_cert,dht_deleg_cert,"
+        "SELECT device_id,device_type,device_label,key_c_pubkey,key_c_privkey,auth_cert,dht_deleg_cert,"
         "issued_at,expires_at,revoked"
         " FROM key_c_issued WHERE device_id=?",
         -1, &stmt, nullptr);
@@ -433,8 +443,8 @@ std::optional<KeyCIssued> Keystore::get_key_c(const std::string& device_id) cons
 std::vector<KeyCIssued> Keystore::list_key_c() const {
     sqlite3_stmt* stmt = nullptr;
     sqlite3_prepare_v2(db_,
-        "SELECT device_id,device_type,device_label,key_c_pubkey,auth_cert,dht_deleg_cert,"
-        "issued_at,expires_at,revoked FROM key_c_issued",
+        "SELECT device_id,device_type,device_label,key_c_pubkey,key_c_privkey,auth_cert,dht_deleg_cert,"
+        "issued_at,expires_at,revoked FROM key_c_issued ORDER BY issued_at ASC",
         -1, &stmt, nullptr);
     std::vector<KeyCIssued> out;
     while (sqlite3_step(stmt) == SQLITE_ROW) out.push_back(row_to_key_c(stmt));

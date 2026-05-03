@@ -49,6 +49,9 @@ private:
     ipc::CborMap groups_kick(const ipc::CborMap& p);
     ipc::CborMap groups_leave(const ipc::CborMap& p);
 
+    ipc::CborMap servers_create_channel(const ipc::CborMap& p);
+    ipc::CborMap servers_set_member_role(const ipc::CborMap& p);
+
     ipc::CborMap devices_list(const ipc::CborMap& p);
     ipc::CborMap devices_revoke(const ipc::CborMap& p);
     ipc::CborMap devices_get_inbox_status(const ipc::CborMap& p);

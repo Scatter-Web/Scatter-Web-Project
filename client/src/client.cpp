@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <ctime>
 #include <chrono>
+#include <condition_variable>
 
 namespace sw::client {
 
@@ -149,6 +150,11 @@ void Client::start() {
 
 void Client::stop() {
     if (!running_.exchange(false)) return;
+    bg_active_ = false;
+    wake_cv_.notify_all();
+    ar_client_.disconnect();
+    inbox_client_.disconnect();
+    outbox_client_.disconnect();
     ipc_server_->stop();
     if (dht_thread_.joinable())        dht_thread_.join();
     if (cert_renew_thread_.joinable()) cert_renew_thread_.join();
@@ -192,15 +198,24 @@ void Client::unlock(const std::string& passphrase) {
     // Connect to dependent services and run startup sequence.
     connect_services();
 
-    // Background loops
+    bg_active_ = true;
     dht_thread_ = std::thread([this]{ dht_loop(); });
     cert_renew_thread_ = std::thread([this]{ cert_renew_loop(); });
 }
 
 void Client::lock() {
-    std::lock_guard<std::mutex> lk(state_mu_);
-    running_ = false;
-    keystore_.lock();
+    {
+        std::lock_guard<std::mutex> lk(state_mu_);
+        bg_active_ = false;
+        keystore_.lock();
+    }
+    wake_cv_.notify_all();
+    if (dht_thread_.joinable())        dht_thread_.join();
+    if (cert_renew_thread_.joinable()) cert_renew_thread_.join();
+    // Disconnect service clients so connect() can be called safely on re-unlock.
+    ar_client_.disconnect();
+    inbox_client_.disconnect();
+    outbox_client_.disconnect();
 }
 
 bool Client::is_unlocked() const {
@@ -261,6 +276,7 @@ void Client::connect_services() {
         std::cerr << "[client] Outbox connect failed: " << e.what() << "\n";
     }
 
+    provision_devices();
     check_renew_key_c();
     replenish_prekeys();
 
@@ -334,6 +350,71 @@ void Client::publish_dht_records(uint64_t timeslot) {
     }
 }
 
+void Client::provision_devices() {
+    auto ka = keystore_.get_key_a();
+    if (!ka) return;
+    auto now_s = static_cast<int64_t>(std::time(nullptr));
+
+    bool has_inbox  = false;
+    bool has_outbox = false;
+    for (const auto& kc : keystore_.list_key_c()) {
+        if (!kc.revoked && kc.device_type == "inbox")  has_inbox  = true;
+        if (!kc.revoked && kc.device_type == "outbox") has_outbox = true;
+    }
+
+    if (!has_inbox && inbox_client_.is_connected()) {
+        auto kp  = mldsa_keygen();
+        Bytes cert  = issue_auth_cert(ka->privkey, ka->pubkey, kp.pub, "inbox", "inbox", now_s);
+        Bytes deleg = issue_delegation_cert(ka->privkey, ka->pubkey, kp.pub, now_s);
+
+        CborMap params;
+        params["key_c_pubkey"]    = CborValue::from_bytes(Bytes(kp.pub.begin(),  kp.pub.end()));
+        params["key_c_privkey"]   = CborValue::from_bytes(Bytes(kp.priv.begin(), kp.priv.end()));
+        params["auth_cert"]       = CborValue::from_bytes(cert);
+        params["delegation_cert"] = CborValue::from_bytes(deleg);
+        try {
+            inbox_client_.call("inbox.update_dht_delegation", params);
+            Key32 fp = sha3_256(ByteSpan{kp.pub.data(), kp.pub.size()});
+            KeyCIssued kc;
+            kc.device_id       = to_hex(fp);
+            kc.device_type     = "inbox";
+            kc.device_label    = "inbox";
+            kc.key_c_pubkey    = kp.pub;
+            kc.key_c_privkey   = kp.priv;
+            kc.auth_cert       = cert;
+            kc.dht_deleg_cert  = deleg;
+            kc.issued_at       = now_s;
+            kc.expires_at      = now_s + 2592000;
+            keystore_.insert_key_c(kc);
+        } catch (...) {}
+    }
+
+    if (!has_outbox && outbox_client_.is_connected()) {
+        auto kp  = mldsa_keygen();
+        Bytes cert = issue_auth_cert(ka->privkey, ka->pubkey, kp.pub, "outbox", "outbox", now_s);
+
+        CborMap params;
+        params["key_c_pubkey"]  = CborValue::from_bytes(Bytes(kp.pub.begin(),  kp.pub.end()));
+        params["key_c_privkey"] = CborValue::from_bytes(Bytes(kp.priv.begin(), kp.priv.end()));
+        params["auth_cert"]     = CborValue::from_bytes(cert);
+        try {
+            outbox_client_.call("outbox.update_auth_cert", params);
+            Key32 fp = sha3_256(ByteSpan{kp.pub.data(), kp.pub.size()});
+            KeyCIssued kc;
+            kc.device_id       = to_hex(fp);
+            kc.device_type     = "outbox";
+            kc.device_label    = "outbox";
+            kc.key_c_pubkey    = kp.pub;
+            kc.key_c_privkey   = kp.priv;
+            kc.auth_cert       = cert;
+            kc.issued_at       = now_s;
+            kc.expires_at      = now_s + 2592000;
+            keystore_.insert_key_c(kc);
+        } catch (...) {}
+    }
+    keystore_.save();
+}
+
 void Client::check_renew_key_c() {
     auto now_s = static_cast<int64_t>(std::time(nullptr));
     auto ka    = keystore_.get_key_a();
@@ -344,21 +425,46 @@ void Client::check_renew_key_c() {
         int64_t threshold = now_s + cfg_.key_c_renewal_threshold_days * 86400;
         if (kc.expires_at > threshold) continue;
 
-        // Re-issue cert.
+        // Rotate Key C keypair and re-issue certs.
+        auto new_kp = mldsa_keygen();
         Bytes new_cert = issue_auth_cert(
-            ka->privkey, ka->pubkey, kc.key_c_pubkey,
+            ka->privkey, ka->pubkey, new_kp.pub,
             kc.device_type, kc.device_label, now_s);
 
-        keystore_.update_key_c_cert(kc.device_id, new_cert, now_s + 2592000);
+        KeyCIssued updated = kc;
+        updated.key_c_pubkey  = new_kp.pub;
+        updated.key_c_privkey = new_kp.priv;
+        updated.auth_cert     = new_cert;
+        updated.issued_at     = now_s;
+        updated.expires_at    = now_s + 2592000;
+        // Recompute device_id from new pubkey.
+        Key32 fp = sha3_256(ByteSpan{new_kp.pub.data(), new_kp.pub.size()});
+        updated.device_id = to_hex(fp);
 
-        // Push new cert to the device via inbox/outbox IPC.
-        CborMap params;
-        params["auth_cert"] = CborValue::from_bytes(new_cert);
         if (kc.device_type == "inbox") {
-            try { inbox_client_.call("inbox.set_auth_cert", params); } catch (...) {}
+            updated.dht_deleg_cert = issue_delegation_cert(
+                ka->privkey, ka->pubkey, new_kp.pub, now_s);
+            CborMap params;
+            params["key_c_pubkey"]    = CborValue::from_bytes(
+                Bytes(new_kp.pub.begin(), new_kp.pub.end()));
+            params["key_c_privkey"]   = CborValue::from_bytes(
+                Bytes(new_kp.priv.begin(), new_kp.priv.end()));
+            params["auth_cert"]       = CborValue::from_bytes(new_cert);
+            params["delegation_cert"] = CborValue::from_bytes(updated.dht_deleg_cert);
+            try { inbox_client_.call("inbox.update_dht_delegation", params); } catch (...) {}
         } else {
-            try { outbox_client_.call("outbox.set_auth_cert", params); } catch (...) {}
+            CborMap params;
+            params["key_c_pubkey"]  = CborValue::from_bytes(
+                Bytes(new_kp.pub.begin(), new_kp.pub.end()));
+            params["key_c_privkey"] = CborValue::from_bytes(
+                Bytes(new_kp.priv.begin(), new_kp.priv.end()));
+            params["auth_cert"]     = CborValue::from_bytes(new_cert);
+            try { outbox_client_.call("outbox.update_auth_cert", params); } catch (...) {}
         }
+
+        // Remove old record and insert updated one.
+        keystore_.revoke_key_c(kc.device_id);
+        keystore_.insert_key_c(updated);
     }
 }
 
@@ -392,7 +498,7 @@ void Client::replenish_prekeys() {
             params["key"]         = CborValue::from_string(to_hex(dht_key));
             params["value"]       = CborValue::from_bytes(dht_val);
             params["ttl_seconds"] = CborValue::from_uint(604800);
-            try { ar_client_.call("dht.put", params); } catch (...) {}
+            try { ar_client_.call("dht.publish", params); } catch (...) {}
         }
         keystore_.save();
 
@@ -424,12 +530,16 @@ void Client::fetch_pending_messages() {
 
 void Client::dht_loop() {
     uint64_t last_slot = current_timeslot();
-    while (running_) {
-        std::this_thread::sleep_for(std::chrono::seconds(30));
-        if (!running_) break;
+    while (bg_active_) {
+        {
+            std::unique_lock<std::mutex> lk(wake_mu_);
+            wake_cv_.wait_for(lk, std::chrono::seconds(30), [this]{ return !bg_active_.load(); });
+        }
+        if (!bg_active_) break;
         uint64_t now_slot = current_timeslot();
         if (now_slot != last_slot) {
             std::lock_guard<std::mutex> lk(state_mu_);
+            if (!bg_active_) break;
             publish_dht_records(now_slot);
             publish_dht_records(now_slot + 1);
             last_slot = now_slot;
@@ -438,10 +548,14 @@ void Client::dht_loop() {
 }
 
 void Client::cert_renew_loop() {
-    while (running_) {
-        std::this_thread::sleep_for(std::chrono::hours(1));
-        if (!running_) break;
+    while (bg_active_) {
+        {
+            std::unique_lock<std::mutex> lk(wake_mu_);
+            wake_cv_.wait_for(lk, std::chrono::hours(1), [this]{ return !bg_active_.load(); });
+        }
+        if (!bg_active_) break;
         std::lock_guard<std::mutex> lk(state_mu_);
+        if (!bg_active_) break;
         check_renew_key_c();
         replenish_prekeys();
     }
@@ -562,8 +676,27 @@ void Client::dispatch_app_frame(const std::string& conv_id,
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
 
-    if (frame_type == "message" || frame_type == "reaction" ||
-        frame_type == "edit"    || frame_type == "delete"   ||
+    if (frame_type == "delete") {
+        std::string target_id = cbor_get_field_str(af, "target_message_id");
+        if (!target_id.empty()) {
+            store_.delete_message(target_id);
+            CborMap ev;
+            ev["conversation_id"] = CborValue::from_string(conv_id);
+            ev["message_id"]      = CborValue::from_string(target_id);
+            ipc_server_->push("message.deleted", ev);
+        }
+    } else if (frame_type == "edit") {
+        std::string target_id = cbor_get_field_str(af, "target_message_id");
+        std::string new_text  = cbor_get_field_str(af, "new_text");
+        if (!target_id.empty() && !new_text.empty()) {
+            store_.update_message_text(target_id, new_text);
+            CborMap ev;
+            ev["conversation_id"] = CborValue::from_string(conv_id);
+            ev["message_id"]      = CborValue::from_string(target_id);
+            ev["new_text"]        = CborValue::from_string(new_text);
+            ipc_server_->push("message.edited", ev);
+        }
+    } else if (frame_type == "message" || frame_type == "reaction" ||
         frame_type == "contact_request" || frame_type == "contact_accept" ||
         frame_type == "group_invite"    || frame_type == "group_accept"   ||
         frame_type == "group_leave"     || frame_type == "group_sender_key_update" ||
@@ -571,7 +704,6 @@ void Client::dispatch_app_frame(const std::string& conv_id,
 
         // Store raw frame.
         std::string msg_id = cbor_get_field_str(af, "id");
-        std::string sender_id_field = cbor_get_field_str(af, "conversation_id");
         if (msg_id.empty()) {
             cbor_decref(&af);
             return;
@@ -814,6 +946,52 @@ void Client::enqueue_dm(const std::string& conv_id,
     }
 }
 
+// Dispatches an already-built app-frame to either DM or group broadcast.
+void Client::enqueue_for_conv(const std::string& conv_id,
+                               const std::string& frame_type,
+                               const Bytes&       af_bytes,
+                               const std::string& persistence,
+                               const std::string& frame_id) {
+    auto conv = store_.get_conversation(conv_id);
+    if (!conv) throw std::runtime_error("unknown conversation");
+
+    if (conv->type == "dm") {
+        enqueue_dm(conv_id, frame_type, af_bytes, persistence, frame_id);
+        return;
+    }
+
+    // Group / server_channel path.
+    auto ka = require_key_a();
+    Key32 my_id = sha3_256(ByteSpan{ka.pubkey.data(), ka.pubkey.size()});
+
+    Bytes envelope   = encrypt_sender_key_envelope(conv_id, af_bytes);
+    DeliveryFrame df;
+    df.message_id         = from_hex(frame_id);
+    df.persistence        = persistence;
+    df.sender_id          = Bytes(my_id.begin(), my_id.end());
+    df.envelope_type      = "sender_key";
+    df.encrypted_envelope = envelope;
+    Bytes frame_bytes     = encode_delivery_frame(df);
+
+    auto members = store_.list_group_members(conv_id);
+    CborArray recipients;
+    for (const auto& mem : members) {
+        if (to_hex(Bytes(my_id.begin(), my_id.end())) == mem.contact_id) continue;
+        CborMap r;
+        r["key_b_kem_pubkey"] = CborValue::from_bytes(mem.their_key_b_kem);
+        recipients.push_back(CborValue::from_map(std::move(r)));
+    }
+    CborMap params;
+    params["message_id"]     = CborValue::from_string(frame_id);
+    params["recipients"]     = CborValue::from_array(std::move(recipients));
+    params["delivery_frame"] = CborValue::from_bytes(frame_bytes);
+    params["priority"]       = CborValue::from_string("normal");
+    params["ttl_seconds"]    = CborValue::from_uint(604800);
+    try {
+        outbox_client_.call("outbox.enqueue_broadcast", params);
+    } catch (...) {}
+}
+
 // ── UI-facing operations ──────────────────────────────────────────────────────
 
 std::string Client::get_display_name() {
@@ -1020,41 +1198,7 @@ std::string Client::send_message(const std::string& conv_id,
     m.reply_to_id     = reply_to_id;
     store_.insert_message(m);
 
-    // Determine if DM or group and enqueue accordingly.
-    auto conv = store_.get_conversation(conv_id);
-    if (!conv) throw std::runtime_error("UNKNOWN_CONVERSATION");
-
-    if (conv->type == "dm") {
-        enqueue_dm(conv_id, "message", af_bytes, "store", msg_id);
-    } else {
-        // Group: encrypt with sender key and broadcast.
-        Bytes envelope = encrypt_sender_key_envelope(conv_id, af_bytes);
-        DeliveryFrame df;
-        df.message_id         = from_hex(msg_id);
-        df.persistence        = "store";
-        df.sender_id          = Bytes(my_id.begin(), my_id.end());
-        df.envelope_type      = "sender_key";
-        df.encrypted_envelope = envelope;
-        Bytes frame_bytes     = encode_delivery_frame(df);
-
-        auto members = store_.list_group_members(conv_id);
-        CborArray recipients;
-        for (const auto& mem : members) {
-            if (to_hex(Bytes(my_id.begin(), my_id.end())) == mem.contact_id) continue;
-            CborMap r;
-            r["key_b_kem_pubkey"] = CborValue::from_bytes(mem.their_key_b_kem);
-            recipients.push_back(CborValue::from_map(std::move(r)));
-        }
-        CborMap params;
-        params["message_id"]     = CborValue::from_string(msg_id);
-        params["recipients"]     = CborValue::from_array(std::move(recipients));
-        params["delivery_frame"] = CborValue::from_bytes(frame_bytes);
-        params["priority"]       = CborValue::from_string("normal");
-        params["ttl_seconds"]    = CborValue::from_uint(604800);
-        try {
-            outbox_client_.call("outbox.enqueue_broadcast", params);
-        } catch (...) {}
-    }
+    enqueue_for_conv(conv_id, "message", af_bytes, "store", msg_id);
     return msg_id;
 }
 
@@ -1078,7 +1222,7 @@ void Client::send_reaction(const std::string& msg_id, const std::string& emoji) 
     Bytes af_bytes = cbor_ser(af);
     cbor_decref(&af);
 
-    enqueue_dm(msg->conversation_id, "reaction", af_bytes, "store", frame_id);
+    enqueue_for_conv(msg->conversation_id, "reaction", af_bytes, "store", frame_id);
 }
 
 void Client::send_unreact(const std::string& msg_id, const std::string& emoji) {
@@ -1100,7 +1244,7 @@ void Client::send_unreact(const std::string& msg_id, const std::string& emoji) {
     Bytes af_bytes = cbor_ser(af);
     cbor_decref(&af);
 
-    enqueue_dm(msg->conversation_id, "reaction", af_bytes, "store", frame_id);
+    enqueue_for_conv(msg->conversation_id, "reaction", af_bytes, "store", frame_id);
 }
 
 void Client::send_edit(const std::string& msg_id, const std::string& new_text) {
@@ -1121,7 +1265,7 @@ void Client::send_edit(const std::string& msg_id, const std::string& new_text) {
     Bytes af_bytes = cbor_ser(af);
     cbor_decref(&af);
 
-    enqueue_dm(msg->conversation_id, "edit", af_bytes, "store", frame_id);
+    enqueue_for_conv(msg->conversation_id, "edit", af_bytes, "store", frame_id);
 }
 
 void Client::send_delete(const std::string& msg_id) {
@@ -1141,7 +1285,10 @@ void Client::send_delete(const std::string& msg_id) {
     Bytes af_bytes = cbor_ser(af);
     cbor_decref(&af);
 
-    enqueue_dm(msg->conversation_id, "delete", af_bytes, "store", frame_id);
+    enqueue_for_conv(msg->conversation_id, "delete", af_bytes, "store", frame_id);
+
+    // Delete locally immediately.
+    store_.delete_message(msg_id);
 }
 
 void Client::send_typing(const std::string& conv_id, const std::string& action) {
@@ -1346,6 +1493,86 @@ void Client::leave_group(const std::string& group_id) {
     auto ka = require_key_a();
     Key32 my_id = sha3_256(ByteSpan{ka.pubkey.data(), ka.pubkey.size()});
     store_.remove_group_member(group_id, to_hex(my_id));
+}
+
+// ── Server channels ───────────────────────────────────────────────────────────
+
+std::string Client::create_server_channel(const std::string& server_id,
+                                            const std::string& name,
+                                            const std::string& channel_type) {
+    auto grp = store_.get_group(server_id);
+    if (!grp || grp->type != "server")
+        throw std::runtime_error("server not found");
+
+    auto ka    = require_key_a();
+    auto now_s = static_cast<int64_t>(std::time(nullptr));
+    Bytes nonce(16);
+    randombytes_buf(nonce.data(), 16);
+    uint8_t ts_bytes[8];
+    uint64_t ts = static_cast<uint64_t>(now_s);
+    for (int i = 7; i >= 0; --i) { ts_bytes[i] = ts & 0xff; ts >>= 8; }
+
+    Key32 cid_key = sha3_256({
+        ByteSpan{ka.pubkey.data(), ka.pubkey.size()},
+        ByteSpan{reinterpret_cast<const uint8_t*>(server_id.data()), server_id.size()},
+        ByteSpan{ts_bytes, 8},
+        ByteSpan{nonce.data(), 16}
+    });
+    std::string channel_id = to_hex(cid_key);
+
+    // Give the channel its own sender key.
+    Key32 my_id = sha3_256(ByteSpan{ka.pubkey.data(), ka.pubkey.size()});
+    Key32 sym_key{};
+    randombytes_buf(sym_key.data(), 32);
+    Keystore::SenderKey sk;
+    sk.group_id   = channel_id;
+    sk.contact_id = to_hex(my_id);
+    std::copy(sym_key.begin(), sym_key.end(), sk.sym_key.begin());
+    sk.generation = 0;
+    sk.created_at = now_s;
+    keystore_.set_sender_key(sk);
+    keystore_.save();
+
+    ServerChannel sc;
+    sc.id         = channel_id;
+    sc.server_id  = server_id;
+    sc.name       = name;
+    sc.type       = channel_type;
+    sc.created_at = now_s;
+    store_.upsert_server_channel(sc);
+
+    Conversation conv;
+    conv.id           = channel_id;
+    conv.type         = "server_channel";
+    conv.display_name = name;
+    conv.group_id     = channel_id;
+    conv.created_at   = now_s;
+    store_.upsert_conversation(conv);
+
+    // Copy server's members to this channel.
+    for (const auto& mem : store_.list_group_members(server_id)) {
+        GroupMember cm = mem;
+        cm.group_id = channel_id;
+        store_.upsert_group_member(cm);
+    }
+
+    return channel_id;
+}
+
+void Client::set_server_member_role(const std::string& server_id,
+                                     const std::string& contact_id,
+                                     const std::string& role) {
+    auto grp = store_.get_group(server_id);
+    if (!grp) throw std::runtime_error("server not found");
+    auto now_s = static_cast<int64_t>(std::time(nullptr));
+    store_.set_server_role(server_id, contact_id, role, now_s);
+
+    // Update the group_member role if the member exists.
+    auto mem = store_.get_group_member(server_id, contact_id);
+    if (mem) {
+        mem->role = role;
+        store_.upsert_group_member(*mem);
+    }
 }
 
 // ── Devices ───────────────────────────────────────────────────────────────────

@@ -91,6 +91,10 @@ void MessageStore::init_schema() {
             PRIMARY KEY (server_id, contact_id)
         );
     )");
+
+    // Migrations: silently ignored if column already exists.
+    try { db_.exec("ALTER TABLE messages ADD COLUMN text TEXT NOT NULL DEFAULT ''"); }
+    catch (...) {}
 }
 
 // ── conversations ─────────────────────────────────────────────────────────────
@@ -251,6 +255,20 @@ void MessageStore::update_message_status(const std::string& id,
                                           const std::string& status) {
     auto s = db_.prepare("UPDATE messages SET status=? WHERE id=?");
     s.bind_text(1, status);
+    s.bind_text(2, id);
+    s.exec();
+}
+
+void MessageStore::delete_message(const std::string& id) {
+    auto s = db_.prepare("DELETE FROM messages WHERE id=?");
+    s.bind_text(1, id);
+    s.exec();
+}
+
+void MessageStore::update_message_text(const std::string& id,
+                                        const std::string& text) {
+    auto s = db_.prepare("UPDATE messages SET text=? WHERE id=?");
+    s.bind_text(1, text);
     s.bind_text(2, id);
     s.exec();
 }
@@ -580,6 +598,22 @@ std::vector<ServerChannel> MessageStore::list_server_channels(
         out.push_back(std::move(c));
     });
     return out;
+}
+
+// ── server_roles ─────────────────────────────────────────────────────────────
+
+void MessageStore::set_server_role(const std::string& server_id,
+                                    const std::string& contact_id,
+                                    const std::string& role,
+                                    int64_t assigned_at) {
+    auto s = db_.prepare(
+        "INSERT OR REPLACE INTO server_roles(server_id,contact_id,role,assigned_at)"
+        " VALUES(?,?,?,?)");
+    s.bind_text(1, server_id);
+    s.bind_text(2, contact_id);
+    s.bind_text(3, role);
+    s.bind_int(4, assigned_at);
+    s.exec();
 }
 
 } // namespace sw::client

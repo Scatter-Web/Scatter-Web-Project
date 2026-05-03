@@ -71,6 +71,14 @@ public:
                                  const std::string& contact_id);
     void        leave_group(const std::string& group_id);
 
+    // Server channels
+    std::string create_server_channel(const std::string& server_id,
+                                       const std::string& name,
+                                       const std::string& type);
+    void        set_server_member_role(const std::string& server_id,
+                                        const std::string& contact_id,
+                                        const std::string& role);
+
     // Devices
     std::vector<KeyCIssued> list_devices();
     void                    revoke_device(const std::string& device_id);
@@ -95,14 +103,18 @@ private:
     std::unique_ptr<IpcHandler> ipc_handler_;
     std::unique_ptr<ipc::Server> ipc_server_;
 
-    std::atomic<bool> running_{false};
-    std::thread       dht_thread_;
-    std::thread       cert_renew_thread_;
-    mutable std::mutex state_mu_;
+    std::atomic<bool>       running_{false};     // main loop alive
+    std::atomic<bool>       bg_active_{false};   // background threads active
+    std::thread             dht_thread_;
+    std::thread             cert_renew_thread_;
+    mutable std::mutex      state_mu_;
+    std::mutex              wake_mu_;
+    std::condition_variable wake_cv_; // notified when bg_active_ → false
 
     void connect_services();
     void push_sender_allowlist();
     void publish_dht_records(uint64_t timeslot);
+    void provision_devices();
     void check_renew_key_c();
     void replenish_prekeys();
     void fetch_pending_messages();
@@ -127,6 +139,12 @@ private:
                      const Bytes&       app_frame_cbor,
                      const std::string& persistence,
                      const std::string& message_id);
+    // Dispatches to enqueue_dm or enqueue_broadcast based on conv type
+    void enqueue_for_conv(const std::string& conv_id,
+                           const std::string& frame_type,
+                           const Bytes&       af_bytes,
+                           const std::string& persistence,
+                           const std::string& frame_id);
 
     // DHT loop: publish every 30 minutes
     void dht_loop();

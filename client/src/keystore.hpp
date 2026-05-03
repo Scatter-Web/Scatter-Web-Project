@@ -38,6 +38,7 @@ struct KeyCIssued {
     std::string        device_type;  // "inbox" | "outbox"
     std::string        device_label;
     crypto::DsaPubKey  key_c_pubkey;
+    crypto::DsaPrivKey key_c_privkey;
     Bytes              auth_cert;
     Bytes              dht_deleg_cert; // empty for outbox
     int64_t            issued_at;

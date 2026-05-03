@@ -107,6 +107,9 @@ public:
                                               int64_t before_seq, int limit) const;
     void                     update_message_status(const std::string& id,
                                                     const std::string& status);
+    void                     delete_message(const std::string& id);
+    void                     update_message_text(const std::string& id,
+                                                  const std::string& text);
     int64_t                  next_seq(const std::string& conv_id) const;
 
     // ── known_certs ──────────────────────────────────────────────────────────
@@ -145,6 +148,12 @@ public:
     void                        upsert_server_channel(const ServerChannel& c);
     std::optional<ServerChannel> get_server_channel(const std::string& id) const;
     std::vector<ServerChannel>  list_server_channels(const std::string& server_id) const;
+
+    // ── server_roles ─────────────────────────────────────────────────────────
+    void set_server_role(const std::string& server_id,
+                          const std::string& contact_id,
+                          const std::string& role,
+                          int64_t assigned_at);
 
 private:
     mutable Db db_;
