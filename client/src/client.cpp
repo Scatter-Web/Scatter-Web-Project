@@ -1592,6 +1592,7 @@ CborMap Client::get_network_status() {
     CborMap result;
     result["anonrouter_connected"] = CborValue::from_bool(ar_client_.is_connected());
     result["relay_count"]          = CborValue::from_uint(0);
+    result["known_peers"]          = CborValue::from_uint(0);
     result["unchoked_peers"]       = CborValue::from_uint(0);
     result["net_credit_bytes"]     = CborValue::from_int(0);
     result["dht_peers"]            = CborValue::from_uint(0);
@@ -1599,6 +1600,8 @@ CborMap Client::get_network_status() {
     if (ar_client_.is_connected()) {
         try {
             auto r = ar_client_.call("tft.status", {});
+            if (auto it = r.find("known_peers"); it != r.end() && it->second.is_uint())
+                result["known_peers"] = it->second;
             if (auto it = r.find("unchoked_count"); it != r.end() && it->second.is_uint())
                 result["unchoked_peers"] = it->second;
         } catch (...) {}

@@ -242,6 +242,7 @@ CborMap IpcHandler::tft_status(const CborMap& /*p*/) {
         arr.push_back(CborValue::from_map(std::move(entry)));
     }
     return {
+        {"known_peers",         CborValue::from_uint(static_cast<uint64_t>(s.known_peers_count))},
         {"unchoked_peer_count", CborValue::from_uint(s.unchoked_count)},
         {"opt_unchoked_peer",   CborValue::from_string(s.opt_unchoked_peer)},
         {"round_number",        CborValue::from_uint(static_cast<uint64_t>(s.round_number))},

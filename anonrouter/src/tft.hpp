@@ -35,6 +35,7 @@ struct TftState {
     std::vector<std::string> unchoked_peers;
     std::string              opt_unchoked_peer;
     size_t                   unchoked_count    = 0;
+    size_t                   known_peers_count = 0;
     int64_t                  round_number      = 0;
     // snapshot of top-5 peers for diagnostics
     struct PeerEntry { std::string peer_id; int64_t credits; };

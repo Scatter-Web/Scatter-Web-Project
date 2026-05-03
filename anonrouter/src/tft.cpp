@@ -69,6 +69,7 @@ TftState TftEngine::state() const {
     TftState s;
     s.round_number = round_number_;
     s.unchoked_count = unchoked_.size();
+    s.known_peers_count = ledger_.size();
     for (auto& p : unchoked_) s.unchoked_peers.push_back(p);
     s.opt_unchoked_peer = opt_unchoked_;
 
