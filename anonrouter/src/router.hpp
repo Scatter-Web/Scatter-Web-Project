@@ -71,6 +71,9 @@ private:
                                const ipc::CborMap& params,
                                const std::string& caller);
 
+    // Initiate connections to bootstrap nodes.
+    void initiate_bootstrap_connections();
+
     // Periodic TFT round (every round_seconds).
     void tft_loop();
 

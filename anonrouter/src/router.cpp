@@ -94,6 +94,8 @@ void Router::start() {
 
     std::cout << "[anonrouter] listening on " << cfg_.listen_addr
               << " ipc=" << cfg_.ipc_path << "\n";
+
+    initiate_bootstrap_connections();
 }
 
 void Router::stop() {
@@ -107,6 +109,21 @@ void Router::stop() {
 void Router::wait() {
     while (running_)
         std::this_thread::sleep_for(500ms);
+}
+
+void Router::initiate_bootstrap_connections() {
+    if (cfg_.bootstrap_nodes.empty()) return;
+
+    for (const auto& bootstrap_addr : cfg_.bootstrap_nodes) {
+        try {
+            channels_.open("", AnonLevel::DIRECT, ChannelMode::MESSAGE, bootstrap_addr);
+            std::cout << "[anonrouter] initiated bootstrap connection to " << bootstrap_addr
+                      << "\n";
+        } catch (const std::exception& e) {
+            std::cerr << "[anonrouter] bootstrap connection to " << bootstrap_addr
+                      << " failed: " << e.what() << "\n";
+        }
+    }
 }
 
 // ── IPC dispatch (intercepts handshake methods) ───────────────────────────────
