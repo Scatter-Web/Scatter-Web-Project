@@ -2,6 +2,16 @@
 #include <cbor.h>
 #include <cstring>
 
+static uint64_t safe_cbor_uint(const cbor_item_t* item) {
+    switch (cbor_int_get_width(item)) {
+        case CBOR_INT_8:  return cbor_get_uint8(item);
+        case CBOR_INT_16: return cbor_get_uint16(item);
+        case CBOR_INT_32: return cbor_get_uint32(item);
+        case CBOR_INT_64: return cbor_get_uint64(item);
+    }
+    return 0;
+}
+
 // CBOR garlic_blob layout (array per clove):
 //   [ type:uint, channel_id:bstr(16), has_frag:bool,
 //     [clove_id, idx, total] or null,
@@ -75,7 +85,7 @@ std::vector<Clove> garlic_decode(ByteSpan blob) {
         cbor_item_t** f = cbor_array_handle(cv);
 
         Clove c;
-        c.type = static_cast<CloveType>(cbor_get_uint64(f[0]));
+        c.type = static_cast<CloveType>(safe_cbor_uint(f[0]));
 
         if (cbor_isa_bytestring(f[1]) && cbor_bytestring_length(f[1]) == 16)
             std::memcpy(c.channel_id.data(), cbor_bytestring_handle(f[1]), 16);
@@ -84,9 +94,9 @@ std::vector<Clove> garlic_decode(ByteSpan blob) {
         if (has_frag && cbor_isa_array(f[3]) && cbor_array_size(f[3]) == 3) {
             cbor_item_t** ff = cbor_array_handle(f[3]);
             FragInfo fi;
-            fi.clove_id = static_cast<uint32_t>(cbor_get_uint64(ff[0]));
-            fi.idx      = static_cast<uint16_t>(cbor_get_uint64(ff[1]));
-            fi.total    = static_cast<uint16_t>(cbor_get_uint64(ff[2]));
+            fi.clove_id = static_cast<uint32_t>(safe_cbor_uint(ff[0]));
+            fi.idx      = static_cast<uint16_t>(safe_cbor_uint(ff[1]));
+            fi.total    = static_cast<uint16_t>(safe_cbor_uint(ff[2]));
             c.frag = fi;
         }
 

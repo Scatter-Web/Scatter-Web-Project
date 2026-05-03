@@ -18,8 +18,6 @@ int main(int argc, char** argv) {
         std::cerr << "[anonrouter] fatal: libsodium init failed\n";
         return EXIT_FAILURE;
     }
-    // Force line-buffered stderr so debug logs appear immediately.
-    setvbuf(stderr, nullptr, _IOLBF, 0);
 
     std::string config_path = "/etc/anonrouter/anonrouter.conf";
     if (argc >= 2) config_path = argv[1];

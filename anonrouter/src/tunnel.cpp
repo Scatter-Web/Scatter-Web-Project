@@ -8,6 +8,16 @@
 
 namespace sw::anonrouter {
 
+static uint64_t safe_cbor_uint(const cbor_item_t* item) {
+    switch (cbor_int_get_width(item)) {
+        case CBOR_INT_8:  return cbor_get_uint8(item);
+        case CBOR_INT_16: return cbor_get_uint16(item);
+        case CBOR_INT_32: return cbor_get_uint32(item);
+        case CBOR_INT_64: return cbor_get_uint64(item);
+    }
+    return 0;
+}
+
 using namespace sw::crypto;
 
 // ── hex helper ───────────────────────────────────────────────────────────────
@@ -83,7 +93,7 @@ RecruitResult parse_recruit_response(const Bytes& payload) {
             r.reason.assign(reinterpret_cast<char*>(cbor_string_handle(pair.value)),
                             cbor_string_length(pair.value));
         else if (k == "retry_after")
-            r.retry_after = static_cast<int64_t>(cbor_get_uint64(pair.value));
+            r.retry_after = static_cast<int64_t>(safe_cbor_uint(pair.value));
         else if (k == "session_token" && cbor_isa_bytestring(pair.value)
                  && cbor_bytestring_length(pair.value) == 32) {
             std::ostringstream ss;

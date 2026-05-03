@@ -3,12 +3,21 @@
 #include <sodium.h>
 #include <cbor.h>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <cstring>
 
 namespace sw::anonrouter {
+
+static uint64_t safe_cbor_uint(const cbor_item_t* item) {
+    switch (cbor_int_get_width(item)) {
+        case CBOR_INT_8:  return cbor_get_uint8(item);
+        case CBOR_INT_16: return cbor_get_uint16(item);
+        case CBOR_INT_32: return cbor_get_uint32(item);
+        case CBOR_INT_64: return cbor_get_uint64(item);
+    }
+    return 0;
+}
 
 using namespace sw::crypto;
 
@@ -108,25 +117,18 @@ bool ChannelManager::upgrade(const MessageId& channel_id, ChannelMode new_mode,
 }
 
 bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
-    std::string cid_str = chan_key(channel_id);
-    std::cerr << "[channel::send] START cid=" << cid_str.substr(0, 8) << "\n";
     ChannelInfo ci;
     {
         std::lock_guard lk(mu_);
-        auto it = channels_.find(cid_str);
-        if (it == channels_.end() || it->second.state != ChannelState::OPEN) {
-            std::cerr << "[channel::send] channel not found or not open\n";
+        auto it = channels_.find(chan_key(channel_id));
+        if (it == channels_.end() || it->second.state != ChannelState::OPEN)
             return false;
-        }
         ci = it->second;
     }
-    std::cerr << "[channel::send] got channel ci, peer_addr=" << ci.peer_addr << "\n";
 
     // Encrypt payload with channel_key.
     AesNonce nonce = aes_random_nonce();
-    std::cerr << "[channel::send] calling aes_encrypt\n";
     auto enc = aes_encrypt(ci.channel_key, payload, {});
-    std::cerr << "[channel::send] aes_encrypt done\n";
 
     // Pack into a DATA garlic clove.
     Clove clove;
@@ -140,10 +142,8 @@ bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
     blob.insert(blob.end(), enc.ciphertext.begin(), enc.ciphertext.end());
     clove.payload = std::move(blob);
 
-    std::cerr << "[channel::send] calling garlic_encode\n";
     Bytes garlic = garlic_encode({clove});
-    if (garlic.empty()) { std::cerr << "[channel::send] garlic_encode returned empty\n"; return false; }
-    std::cerr << "[channel::send] garlic_encode done, size=" << garlic.size() << "\n";
+    if (garlic.empty()) return false;
 
     // Build cell.
     CellHeader hdr;
@@ -169,14 +169,10 @@ bool ChannelManager::send(const MessageId& channel_id, ByteSpan payload) {
     }
 
     ByteSpan gspan{garlic.data(), hdr.garlic_len};
-    std::cerr << "[channel::send] calling cell_build\n";
     Cell cell = cell_build(hdr, ci.channel_key, gspan);
-    std::cerr << "[channel::send] cell_build done\n";
 
     if (ci.anon_level == AnonLevel::DIRECT && !ci.peer_addr.empty()) {
-        std::cerr << "[channel::send] sending via UDP to " << ci.peer_addr << "\n";
         transport_.send(ci.peer_addr, ByteSpan{cell.data(), cell.size()});
-        std::cerr << "[channel::send] UDP send done, returning true\n";
         return true;
     }
     if (ci.remote_inbound_guard) {
@@ -264,9 +260,9 @@ void ChannelManager::on_chan_open(const Bytes& payload) {
                 reinterpret_cast<char*>(cbor_string_handle(p.value)),
                 cbor_string_length(p.value));
         else if (k == "anon_level")
-            ci.anon_level = static_cast<AnonLevel>(cbor_get_uint64(p.value));
+            ci.anon_level = static_cast<AnonLevel>(safe_cbor_uint(p.value));
         else if (k == "mode")
-            ci.mode = static_cast<ChannelMode>(cbor_get_uint64(p.value));
+            ci.mode = static_cast<ChannelMode>(safe_cbor_uint(p.value));
     }
     cbor_decref(&root);
 

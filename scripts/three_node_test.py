@@ -323,6 +323,13 @@ def run(binary: str):
                 # ── Phase 5: Channel isolation ────────────────────────
                 print("\n── Phase 5: Channel Isolation ──────────────────────")
 
+                # Drain any stale frame.recv events left over from Phase 4
+                # (a timed-out send_and_receive may have left unconsumed events).
+                for node in nodes:
+                    with node._lock:
+                        node._push_events = [e for e in node._push_events
+                                             if e.get("event") != "frame.recv"]
+
                 if (0, 1) in cids and (0, 2) in cids:
                     cid_12 = cids[(0, 1)][0]  # n1's channel to n2
                     cid_13 = cids[(0, 2)][0]  # n1's channel to n3
@@ -382,12 +389,12 @@ def run(binary: str):
                                 r = f.result()
                                 assert r.get("sent") is True, f"concurrent frame.send failed: {r}"
 
-                        # Drain all expected frame.recv events (6 total)
-                        for _ in range(6):
-                            for node in nodes:
+                        # Drain all expected frame.recv events: 2 per node × 3 nodes = 6.
+                        # Each node receives exactly 2 frames (one fwd, one rev).
+                        for node in nodes:
+                            for _ in range(2):
                                 try:
-                                    node.wait_event("frame.recv", timeout=0.5)
-                                    break
+                                    node.wait_event("frame.recv", timeout=3.0)
                                 except TimeoutError:
                                     pass
 

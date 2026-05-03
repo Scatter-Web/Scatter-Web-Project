@@ -4,7 +4,6 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
-#include <iostream>
 #include <stdexcept>
 
 namespace sw::ipc {
@@ -116,6 +115,9 @@ void Server::conn_loop(int fd) {
         }
 
         try {
+            // Acquire clients_mu_ to serialise with push() — both write to
+            // the same socket fd and must not interleave their bytes.
+            std::lock_guard lock(clients_mu_);
             write_frame(fd, encode_response(resp));
         } catch (...) {
             break;

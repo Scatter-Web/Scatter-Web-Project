@@ -14,6 +14,16 @@ namespace sw::anonrouter {
 
 using namespace std::chrono_literals;
 
+static uint64_t safe_cbor_uint(const cbor_item_t* item) {
+    switch (cbor_int_get_width(item)) {
+        case CBOR_INT_8:  return cbor_get_uint8(item);
+        case CBOR_INT_16: return cbor_get_uint16(item);
+        case CBOR_INT_32: return cbor_get_uint32(item);
+        case CBOR_INT_64: return cbor_get_uint64(item);
+    }
+    return 0;
+}
+
 static std::string chan_id_hex(const MessageId& id) {
     std::ostringstream ss;
     for (uint8_t b : id) ss << std::hex << std::setw(2) << std::setfill('0') << (int)b;
@@ -233,9 +243,9 @@ void Router::on_chan_open_cell(const std::string& peer_addr, const Cell& cell) {
                 && cbor_bytestring_length(pair.value) == 16)
             std::memcpy(channel_id.data(), cbor_bytestring_handle(pair.value), 16);
         else if (k == "anon_level" && cbor_isa_uint(pair.value))
-            anon_level = static_cast<AnonLevel>(cbor_get_uint64(pair.value));
+            anon_level = static_cast<AnonLevel>(safe_cbor_uint(pair.value));
         else if (k == "mode" && cbor_isa_uint(pair.value))
-            mode = static_cast<ChannelMode>(cbor_get_uint64(pair.value));
+            mode = static_cast<ChannelMode>(safe_cbor_uint(pair.value));
     }
     cbor_decref(&root);
 

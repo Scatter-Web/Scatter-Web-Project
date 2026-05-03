@@ -55,14 +55,27 @@ namespace {
 CborValue item_to_value(cbor_item_t* item);
 cbor_item_t* value_to_item(const CborValue& v);
 
+// cbor_get_uint64 reads 8 bytes from the item's union regardless of the actual
+// encoded width. For width < 64 bits, the high bytes are uninitialized.
+// Always use the width-appropriate getter and zero-extend to uint64.
+static uint64_t safe_get_uint(const cbor_item_t* item) {
+    switch (cbor_int_get_width(item)) {
+        case CBOR_INT_8:  return cbor_get_uint8(item);
+        case CBOR_INT_16: return cbor_get_uint16(item);
+        case CBOR_INT_32: return cbor_get_uint32(item);
+        case CBOR_INT_64: return cbor_get_uint64(item);
+    }
+    return 0;
+}
+
 CborValue item_to_value(cbor_item_t* item) {
     if (!item) return CborValue::null_val();
 
     if (cbor_isa_uint(item))
-        return CborValue::from_uint(cbor_get_uint64(item));
+        return CborValue::from_uint(safe_get_uint(item));
 
     if (cbor_isa_negint(item))
-        return CborValue::from_int(-1 - static_cast<int64_t>(cbor_get_uint64(item)));
+        return CborValue::from_int(-1 - static_cast<int64_t>(safe_get_uint(item)));
 
     if (cbor_isa_bytestring(item)) {
         Bytes b(cbor_bytestring_handle(item),
